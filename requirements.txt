@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+pydantic
+huggingface-hub
+# llama-cpp-python musi zostać zainstalowane ręcznie z flagami dla Vulkana (zobacz install_vulkan.bat)
+llama-cpp-python

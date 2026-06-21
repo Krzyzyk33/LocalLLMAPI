@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LocalLLMAPI</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    <link rel="stylesheet" href="style.css?v=4">
+</head>
+<body>
+    <div class="sidebar">
+        <div class="logo">
+            <div class="logo-icon"><i class="ph ph-lightning" style="color: white; font-size: 16px; margin: 4px;"></i></div>
+            <span>LocalLLMAPI</span>
+        </div>
+        
+        <nav>
+            <a href="#" class="nav-item active" data-tab="models-tab"><i class="ph ph-cpu"></i> Modele</a>
+            <a href="#" class="nav-item" data-tab="playground-tab"><i class="ph ph-chat-teardrop-text"></i> Playground</a>
+            <a href="#" class="nav-item" data-tab="keys-tab"><i class="ph ph-key"></i> Klucze API</a>
+            <a href="#" class="nav-item" data-tab="logs-tab"><i class="ph ph-chart-bar"></i> Logi API</a>
+            <a href="#" class="nav-item" data-tab="connect-tab"><i class="ph ph-plug"></i> Połączenie</a>
+        </nav>
+
+        <div class="status-widget">
+            <div class="status-indicator" id="status-indicator"></div>
+            <span id="status-text">Łączenie...</span>
+        </div>
+    </div>
+
+    <main class="content">
+        <!-- ZAKŁADKA MODELE -->
+        <section id="models-tab" class="tab-content active">
+            <div class="page-header">
+                <h1>Dostępne Modele</h1>
+                <p>Wszystkie modele wczytane z folderu <code>models/</code>.</p>
+            </div>
+            <div class="active-model-box">
+                <span class="label">Aktualnie załadowany do pamięci:</span>
+                <span class="value" id="active-model-name">Brak</span>
+            </div>
+            <div class="models-grid" id="models-list">
+                <!-- Ładowane dynamicznie -->
+            </div>
+        </section>
+
+        <!-- ZAKŁADKA PLAYGROUND -->
+        <section id="playground-tab" class="tab-content">
+            <div class="page-header" style="display: flex; justify-content: space-between; align-items: flex-start;">
+                <div>
+                    <h1>Playground</h1>
+                    <p>Przetestuj dowolny załadowany model na żywo w przeglądarce.</p>
+                </div>
+                <div class="form-group" style="flex-direction: row; align-items: center; background: var(--card-bg); padding: 0.5rem; border-radius: 8px;">
+                    <label for="pg-model-select" style="margin-bottom: 0; min-width: max-content;">Model:</label>
+                    <select id="pg-model-select" style="min-width: 250px; max-width: 350px; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">
+                        <option value="">Wybierz model...</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div class="playground-container">
+                <div class="chat-window" id="chat-window">
+                    <div class="chat-message assistant">
+                        <div class="bubble">Wybierz model z listy u góry i napisz wiadomość, aby rozpocząć! Pamiętaj, że potrzebujesz stworzyć swój Klucz API w zakładce "Klucze API", jeśli jeszcze go nie masz.</div>
+                    </div>
+                </div>
+                <div class="chat-input-area">
+                    <div class="form-group" style="margin-bottom: 0; display: flex; flex-direction: row; gap: 0.5rem; width: 100%;">
+                        <textarea id="pg-message-input" placeholder="Napisz do modelu... (Shift+Enter by wysłać)" rows="2"></textarea>
+                        <button id="pg-send-btn" onclick="sendPlaygroundMessage()" style="height: auto; padding: 0 1.5rem;"><i class="ph ph-paper-plane-right"></i></button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ZAKŁADKA KLUCZE API -->
+        <section id="keys-tab" class="tab-content">
+            <div class="page-header">
+                <h1>Zarządzanie Kluczami API</h1>
+                <p>Twórz własne klucze by śledzić zużycie dla różnych aplikacji lub projektów.</p>
+            </div>
+            
+            <div class="create-key-form">
+                <h3>Utwórz nowy klucz</h3>
+                <div class="form-group">
+                    <input type="text" id="new-key-name" placeholder="Nazwa klucza (np. Mój Projekt)" />
+                    <input type="text" id="new-key-value" placeholder="Wartość klucza (np. sk-moje-api-123)" />
+                    <button onclick="createApiKey()"><i class="ph ph-plus-circle"></i> Utwórz</button>
+                </div>
+                <div id="key-error" style="color: #ef4444; margin-top: 10px; font-size: 0.9em;"></div>
+            </div>
+
+            <div class="table-responsive">
+                <table class="or-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 40px;"><div class="checkbox-custom"></div></th>
+                            <th>Name</th>
+                            <th>Guardrails</th>
+                            <th>Expires</th>
+                            <th>Last Used</th>
+                            <th>Usage</th>
+                            <th style="width: 60px;"></th>
+                        </tr>
+                    </thead>
+                    <tbody id="keys-list">
+                        <!-- Lista kluczy API ładowana z serwera -->
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- ZAKŁADKA LOGI API -->
+        <section id="logs-tab" class="tab-content">
+            <div class="page-header">
+                <h1>Logi i Statystyki</h1>
+                <p>Wybierz klucz, aby sprawdzić jego historię i wykres użycia.</p>
+            </div>
+            
+            <div id="log-keys-grid" class="log-keys-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1rem; margin-top: 1rem;">
+                <!-- Kafelki ładowane dynamicznie -->
+            </div>
+
+            <div id="key-details" style="display: none; margin-top: 1.5rem;">
+                <button onclick="backToLogsGrid()" style="background: transparent; border: 1px solid var(--border-color); color: #f8fafc; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; margin-bottom: 1.5rem; display: flex; align-items: center; gap: 0.5rem;">
+                    <span>←</span> Wróć do wyboru klucza
+                </button>
+                <h2 id="key-details-title" style="margin-bottom: 1rem; color: #f8fafc;">Statystyki klucza</h2>
+                <div class="chart-container">
+                    <canvas id="usageChart"></canvas>
+                </div>
+
+                <h3 style="margin-bottom: 1rem; margin-top: 2rem;">Historia zapytań dla wybranego klucza</h3>
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Czas</th>
+                            <th>Model API ID</th>
+                            <th>Czas (s)</th>
+                            <th>Tokeny</th>
+                            <th>t/s (Średnia / Min / Max)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="logs-tbody">
+                        <!-- Ładowane dynamicznie -->
+                    </tbody>
+                </table>
+            </div>
+            <div id="no-keys-msg" style="color: #888; text-align: center; margin-top: 2rem;">
+                Brak dostępnych kluczy. Wygeneruj je w zakładce "Klucze API".
+            </div>
+        </section>
+
+        <!-- ZAKŁADKA POŁĄCZENIE -->
+        <section id="connect-tab" class="tab-content">
+            <div class="page-header">
+                <h1>Jak się połączyć?</h1>
+                <p>Użyj poniższego kodu, aby połączyć dowolną aplikację (np. skrypt w Pythonie) z tym lokalnym routerem.</p>
+            </div>
+
+            <div class="code-block">
+                <div class="code-header">
+                    <span>Python (OpenAI SDK)</span>
+                    <button class="copy-btn" onclick="copyCode()">Kopiuj</button>
+                </div>
+                <pre><code id="connection-code">Ładowanie adresu IP...</code></pre>
+            </div>
+            
+            <div class="info-box">
+                💡 <strong>Wskazówka:</strong> Pamiętaj aby podać dokładną nazwę modelu z zakładki "Modele" i poprawny <code>api_key</code> z zakładki "Klucze API".
+            </div>
+        </section>
+    </main>
+
+    <!-- MODALE -->
+    <div class="modal-overlay" id="edit-modal">
+        <div class="modal-content">
+            <h3>Edytuj klucz API</h3>
+            <p style="margin-bottom: 1rem; color: #94a3b8; font-size: 0.9rem;">Zmień nazwę i wartość dla tego klucza.</p>
+            
+            <label style="color: #94a3b8; font-size: 0.85rem; margin-bottom: 0.25rem; display: block;">Nazwa klucza</label>
+            <input type="text" id="edit-key-input" class="modal-input" />
+            
+            <label style="color: #94a3b8; font-size: 0.85rem; margin-bottom: 0.25rem; display: block;">Klucz API</label>
+            <input type="text" id="edit-key-value-input" class="modal-input" />
+            
+            <div class="modal-actions">
+                <button class="modal-btn secondary" onclick="closeModal('edit-modal')">Anuluj</button>
+                <button class="modal-btn primary" onclick="saveEditKey()">Zapisz</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js?v=8"></script>
+</body>
+</html>
