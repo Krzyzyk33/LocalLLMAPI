@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pl">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -8,7 +8,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://unpkg.com/@phosphor-icons/web"></script>
-    <link rel="stylesheet" href="style.css?v=4">
+    <link rel="stylesheet" href="style.css?v=5">
 </head>
 <body>
     <div class="sidebar">
@@ -18,16 +18,17 @@
         </div>
         
         <nav>
-            <a href="#" class="nav-item active" data-tab="models-tab"><i class="ph ph-cpu"></i> Modele</a>
-            <a href="#" class="nav-item" data-tab="playground-tab"><i class="ph ph-chat-teardrop-text"></i> Playground</a>
-            <a href="#" class="nav-item" data-tab="keys-tab"><i class="ph ph-key"></i> Klucze API</a>
-            <a href="#" class="nav-item" data-tab="logs-tab"><i class="ph ph-chart-bar"></i> Logi API</a>
-            <a href="#" class="nav-item" data-tab="connect-tab"><i class="ph ph-plug"></i> Połączenie</a>
+            <a href="#" class="nav-item active" data-tab="models-tab" data-i18n="nav_models"><i class="ph ph-cpu"></i> Models</a>
+            <a href="#" class="nav-item" data-tab="playground-tab" data-i18n="nav_playground"><i class="ph ph-chat-teardrop-text"></i> Playground</a>
+            <a href="#" class="nav-item" data-tab="keys-tab" data-i18n="nav_keys"><i class="ph ph-key"></i> API Keys</a>
+            <a href="#" class="nav-item" data-tab="logs-tab" data-i18n="nav_logs"><i class="ph ph-chart-bar"></i> API Logs</a>
+            <a href="#" class="nav-item" data-tab="connect-tab" data-i18n="nav_connect"><i class="ph ph-plug"></i> Connection</a>
+            <a href="#" class="nav-item" data-tab="settings-tab" data-i18n="nav_settings"><i class="ph ph-gear"></i> Settings</a>
         </nav>
 
         <div class="status-widget">
             <div class="status-indicator" id="status-indicator"></div>
-            <span id="status-text">Łączenie...</span>
+            <span id="status-text" data-i18n="status_connecting">Connecting...</span>
         </div>
     </div>
 
@@ -35,12 +36,12 @@
         <!-- ZAKŁADKA MODELE -->
         <section id="models-tab" class="tab-content active">
             <div class="page-header">
-                <h1>Dostępne Modele</h1>
-                <p>Wszystkie modele wczytane z folderu <code>models/</code>.</p>
+                <h1 data-i18n="models_title">Available Models</h1>
+                <p data-i18n="models_desc">All models loaded from the <code>models/</code> folder.</p>
             </div>
             <div class="active-model-box">
-                <span class="label">Aktualnie załadowany do pamięci:</span>
-                <span class="value" id="active-model-name">Brak</span>
+                <span class="label" data-i18n="models_active_label">Currently loaded in memory:</span>
+                <span class="value" id="active-model-name" data-i18n="models_none">None</span>
             </div>
             <div class="models-grid" id="models-list">
                 <!-- Ładowane dynamicznie -->
@@ -51,13 +52,13 @@
         <section id="playground-tab" class="tab-content">
             <div class="page-header" style="display: flex; justify-content: space-between; align-items: flex-start;">
                 <div>
-                    <h1>Playground</h1>
-                    <p>Przetestuj dowolny załadowany model na żywo w przeglądarce.</p>
+                    <h1 data-i18n="pg_title">Playground</h1>
+                    <p data-i18n="pg_desc">Test any loaded model live in the browser.</p>
                 </div>
                 <div class="form-group" style="flex-direction: row; align-items: center; background: var(--card-bg); padding: 0.5rem; border-radius: 8px;">
-                    <label for="pg-model-select" style="margin-bottom: 0; min-width: max-content;">Model:</label>
+                    <label for="pg-model-select" style="margin-bottom: 0; min-width: max-content;" data-i18n="pg_model_label">Model:</label>
                     <select id="pg-model-select" style="min-width: 250px; max-width: 350px; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">
-                        <option value="">Wybierz model...</option>
+                        <option value="" data-i18n="pg_select_model">Select model...</option>
                     </select>
                 </div>
             </div>
@@ -65,12 +66,12 @@
             <div class="playground-container">
                 <div class="chat-window" id="chat-window">
                     <div class="chat-message assistant">
-                        <div class="bubble">Wybierz model z listy u góry i napisz wiadomość, aby rozpocząć! Pamiętaj, że potrzebujesz stworzyć swój Klucz API w zakładce "Klucze API", jeśli jeszcze go nie masz.</div>
+                        <div class="bubble" data-i18n="pg_welcome">Select a model from the list above and write a message to start! Remember that you need to create your API Key in the 'API Keys' tab if you haven't already.</div>
                     </div>
                 </div>
                 <div class="chat-input-area">
                     <div class="form-group" style="margin-bottom: 0; display: flex; flex-direction: row; gap: 0.5rem; width: 100%;">
-                        <textarea id="pg-message-input" placeholder="Napisz do modelu... (Shift+Enter by wysłać)" rows="2"></textarea>
+                        <textarea id="pg-message-input" data-i18n="pg_placeholder" placeholder="Write to the model... (Shift+Enter to send)" rows="2"></textarea>
                         <button id="pg-send-btn" onclick="sendPlaygroundMessage()" style="height: auto; padding: 0 1.5rem;"><i class="ph ph-paper-plane-right"></i></button>
                     </div>
                 </div>
@@ -80,16 +81,16 @@
         <!-- ZAKŁADKA KLUCZE API -->
         <section id="keys-tab" class="tab-content">
             <div class="page-header">
-                <h1>Zarządzanie Kluczami API</h1>
-                <p>Twórz własne klucze by śledzić zużycie dla różnych aplikacji lub projektów.</p>
+                <h1 data-i18n="keys_title">API Key Management</h1>
+                <p data-i18n="keys_desc">Create your own keys to track usage for different apps or projects.</p>
             </div>
             
             <div class="create-key-form">
-                <h3>Utwórz nowy klucz</h3>
+                <h3 data-i18n="keys_create_title">Create new key</h3>
                 <div class="form-group">
-                    <input type="text" id="new-key-name" placeholder="Nazwa klucza (np. Mój Projekt)" />
-                    <input type="text" id="new-key-value" placeholder="Wartość klucza (np. sk-moje-api-123)" />
-                    <button onclick="createApiKey()"><i class="ph ph-plus-circle"></i> Utwórz</button>
+                    <input type="text" id="new-key-name" data-i18n="keys_name_placeholder" placeholder="Key name (e.g. My Project)" />
+                    <input type="text" id="new-key-value" data-i18n="keys_val_placeholder" placeholder="Key value (e.g. sk-my-api-123)" />
+                    <button onclick="createApiKey()" data-i18n="keys_create_btn"><i class="ph ph-plus-circle"></i> Create</button>
                 </div>
                 <div id="key-error" style="color: #ef4444; margin-top: 10px; font-size: 0.9em;"></div>
             </div>
@@ -99,11 +100,11 @@
                     <thead>
                         <tr>
                             <th style="width: 40px;"><div class="checkbox-custom"></div></th>
-                            <th>Name</th>
-                            <th>Guardrails</th>
-                            <th>Expires</th>
-                            <th>Last Used</th>
-                            <th>Usage</th>
+                            <th data-i18n="th_name">Name</th>
+                            <th data-i18n="th_guardrails">Guardrails</th>
+                            <th data-i18n="th_expires">Expires</th>
+                            <th data-i18n="th_last_used">Last Used</th>
+                            <th data-i18n="th_usage">Usage</th>
                             <th style="width: 60px;"></th>
                         </tr>
                     </thead>
@@ -117,8 +118,8 @@
         <!-- ZAKŁADKA LOGI API -->
         <section id="logs-tab" class="tab-content">
             <div class="page-header">
-                <h1>Logi i Statystyki</h1>
-                <p>Wybierz klucz, aby sprawdzić jego historię i wykres użycia.</p>
+                <h1 data-i18n="logs_title">Logs & Statistics</h1>
+                <p data-i18n="logs_desc">Select a key to check its history and usage chart.</p>
             </div>
             
             <div id="log-keys-grid" class="log-keys-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1rem; margin-top: 1rem;">
@@ -126,23 +127,23 @@
             </div>
 
             <div id="key-details" style="display: none; margin-top: 1.5rem;">
-                <button onclick="backToLogsGrid()" style="background: transparent; border: 1px solid var(--border-color); color: #f8fafc; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; margin-bottom: 1.5rem; display: flex; align-items: center; gap: 0.5rem;">
-                    <span>←</span> Wróć do wyboru klucza
+                <button onclick="backToLogsGrid()" style="background: transparent; border: 1px solid var(--border-color); color: #f8fafc; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; margin-bottom: 1.5rem; display: flex; align-items: center; gap: 0.5rem;" data-i18n="logs_back">
+                    ← Back to key selection
                 </button>
-                <h2 id="key-details-title" style="margin-bottom: 1rem; color: #f8fafc;">Statystyki klucza</h2>
+                <h2 id="key-details-title" style="margin-bottom: 1rem; color: #f8fafc;" data-i18n="logs_stats_title">Key statistics</h2>
                 <div class="chart-container">
                     <canvas id="usageChart"></canvas>
                 </div>
 
-                <h3 style="margin-bottom: 1rem; margin-top: 2rem;">Historia zapytań dla wybranego klucza</h3>
+                <h3 style="margin-bottom: 1rem; margin-top: 2rem;" data-i18n="logs_history_title">Query history for the selected key</h3>
                 <table class="data-table">
                     <thead>
                         <tr>
-                            <th>Czas</th>
-                            <th>Model API ID</th>
-                            <th>Czas (s)</th>
-                            <th>Tokeny</th>
-                            <th>t/s (Średnia / Min / Max)</th>
+                            <th data-i18n="th_time">Time</th>
+                            <th data-i18n="th_model_id">Model API ID</th>
+                            <th data-i18n="th_time_s">Time (s)</th>
+                            <th data-i18n="th_tokens">Tokens</th>
+                            <th data-i18n="th_tps">t/s (Avg / Min / Max)</th>
                         </tr>
                     </thead>
                     <tbody id="logs-tbody">
@@ -150,28 +151,43 @@
                     </tbody>
                 </table>
             </div>
-            <div id="no-keys-msg" style="color: #888; text-align: center; margin-top: 2rem;">
-                Brak dostępnych kluczy. Wygeneruj je w zakładce "Klucze API".
+            <div id="no-keys-msg" style="color: #888; text-align: center; margin-top: 2rem;" data-i18n="logs_no_keys">
+                No keys available. Generate them in the 'API Keys' tab.
             </div>
         </section>
 
         <!-- ZAKŁADKA POŁĄCZENIE -->
         <section id="connect-tab" class="tab-content">
             <div class="page-header">
-                <h1>Jak się połączyć?</h1>
-                <p>Użyj poniższego kodu, aby połączyć dowolną aplikację (np. skrypt w Pythonie) z tym lokalnym routerem.</p>
+                <h1 data-i18n="conn_title">How to connect?</h1>
+                <p data-i18n="conn_desc">Use the code below to connect any app (e.g. Python script) to this local router.</p>
             </div>
 
             <div class="code-block">
                 <div class="code-header">
                     <span>Python (OpenAI SDK)</span>
-                    <button class="copy-btn" onclick="copyCode()">Kopiuj</button>
+                    <button class="copy-btn" onclick="copyCode()" data-i18n="conn_copy">Copy</button>
                 </div>
-                <pre><code id="connection-code">Ładowanie adresu IP...</code></pre>
+                <pre><code id="connection-code">...</code></pre>
             </div>
             
-            <div class="info-box">
-                💡 <strong>Wskazówka:</strong> Pamiętaj aby podać dokładną nazwę modelu z zakładki "Modele" i poprawny <code>api_key</code> z zakładki "Klucze API".
+            <div class="info-box" data-i18n="conn_tip">
+                💡 <strong>Tip:</strong> Remember to provide the exact model name from the 'Models' tab and the correct <code>api_key</code> from the 'API Keys' tab.
+            </div>
+        </section>
+
+        <!-- ZAKŁADKA USTAWIENIA -->
+        <section id="settings-tab" class="tab-content">
+            <div class="page-header">
+                <h1 data-i18n="settings_title">Settings</h1>
+                <p data-i18n="settings_desc">Configure the application preferences.</p>
+            </div>
+            <div class="form-group" style="max-width: 400px; background: var(--card-bg); padding: 1.5rem; border-radius: 8px; border: 1px solid var(--border-color);">
+                <label for="settings-lang-select" data-i18n="settings_lang">Language</label>
+                <select id="settings-lang-select" style="width: 100%; padding: 0.5rem; background: #111; color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 6px;">
+                    <option value="en">English</option>
+                    <option value="pl">Polski</option>
+                </select>
             </div>
         </section>
     </main>
@@ -179,22 +195,23 @@
     <!-- MODALE -->
     <div class="modal-overlay" id="edit-modal">
         <div class="modal-content">
-            <h3>Edytuj klucz API</h3>
-            <p style="margin-bottom: 1rem; color: #94a3b8; font-size: 0.9rem;">Zmień nazwę i wartość dla tego klucza.</p>
+            <h3 data-i18n="modal_edit_title">Edit API key</h3>
+            <p style="margin-bottom: 1rem; color: #94a3b8; font-size: 0.9rem;" data-i18n="modal_edit_desc">Change name and value for this key.</p>
             
-            <label style="color: #94a3b8; font-size: 0.85rem; margin-bottom: 0.25rem; display: block;">Nazwa klucza</label>
+            <label style="color: #94a3b8; font-size: 0.85rem; margin-bottom: 0.25rem; display: block;" data-i18n="modal_key_name">Key name</label>
             <input type="text" id="edit-key-input" class="modal-input" />
             
-            <label style="color: #94a3b8; font-size: 0.85rem; margin-bottom: 0.25rem; display: block;">Klucz API</label>
+            <label style="color: #94a3b8; font-size: 0.85rem; margin-bottom: 0.25rem; display: block;" data-i18n="modal_key_val">API Key</label>
             <input type="text" id="edit-key-value-input" class="modal-input" />
             
             <div class="modal-actions">
-                <button class="modal-btn secondary" onclick="closeModal('edit-modal')">Anuluj</button>
-                <button class="modal-btn primary" onclick="saveEditKey()">Zapisz</button>
+                <button class="modal-btn secondary" onclick="closeModal('edit-modal')" data-i18n="modal_cancel">Cancel</button>
+                <button class="modal-btn primary" onclick="saveEditKey()" data-i18n="modal_save">Save</button>
             </div>
         </div>
     </div>
 
-    <script src="script.js?v=8"></script>
+    <script src="i18n.js?v=1"></script>
+    <script src="script.js?v=11"></script>
 </body>
 </html>

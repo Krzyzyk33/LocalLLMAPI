@@ -5,6 +5,7 @@ let selectedKeyId = null;
 
 let lastModelsDataStr = "";
 let lastKeysDataStr = "";
+let activeModel = null;
 
 // Obsługa zakładek
 document.querySelectorAll('.nav-item').forEach(item => {
@@ -144,7 +145,7 @@ async function fetchKeyDetails() {
                                 <td>
                                     <div style="display: flex; align-items: center; gap: 0.5rem;">
                                         <span style="color: var(--accent); font-family: monospace;">${log.model}</span>
-                                        <button onclick="copyToClipboard('${log.model}')" style="background: transparent; border: none; color: #94a3b8; cursor: pointer; padding: 2px;" title="Kopiuj ID modelu"><i class="ph ph-copy"></i></button>
+                                        <button onclick="copyToClipboard('${log.model}')" style="background: transparent; border: none; color: #94a3b8; cursor: pointer; padding: 2px;" title=t('js_copy_id')><i class="ph ph-copy"></i></button>
                                     </div>
                                 </td>
                             <td>${log.elapsed_seconds}</td>
@@ -178,8 +179,9 @@ async function fetchData() {
         if (statusRes.ok) {
             const statusData = await statusRes.json();
             statusIndicator.classList.add("online");
-            statusText.textContent = "Online";
-            activeModelName.textContent = statusData.active_model || "Brak modelu w pamięci";
+            statusText.textContent = t("js_online");
+            activeModel = statusData.active_model;
+            activeModelName.textContent = activeModel || t("models_none");
             
             if (statusData.local_ip) {
                 currentIp = statusData.local_ip;
@@ -211,7 +213,7 @@ async function fetchData() {
                                 <div class="api-id-label">API Model ID</div>
                                 <div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.25rem;">
                                     <div class="api-id-value" style="margin-top: 0;">${m.id}</div>
-                                    <button onclick="copyToClipboard('${m.id}')" style="background: transparent; border: none; color: #94a3b8; cursor: pointer; padding: 2px;" title="Kopiuj ID modelu"><i class="ph ph-copy"></i></button>
+                                    <button onclick="copyToClipboard('${m.id}')" style="background: transparent; border: none; color: #94a3b8; cursor: pointer; padding: 2px;" title=t('js_copy_id')><i class="ph ph-copy"></i></button>
                                 </div>
                             </div>
                         `;
@@ -468,7 +470,7 @@ async function fetchKeyDetails() {
                             <td>
                                 <div style="display: flex; align-items: center; gap: 0.5rem;">
                                     <span style="color: var(--accent); font-family: monospace;">${log.model}</span>
-                                    <button onclick="copyToClipboard('${log.model}')" style="background: transparent; border: none; color: #94a3b8; cursor: pointer; padding: 2px;" title="Kopiuj ID modelu">📋</button>
+                                    <button onclick="copyToClipboard('${log.model}')" style="background: transparent; border: none; color: #94a3b8; cursor: pointer; padding: 2px;" title=t('js_copy_id')>📋</button>
                                 </div>
                             </td>
                             <td>${log.elapsed_seconds}</td>
@@ -510,11 +512,11 @@ async function sendPlaygroundMessage() {
     
     if(!text) return;
     if(!model) {
-        alert("Wybierz najpierw model z listy u góry!");
+        alert(t('js_err_no_model'));
         return;
     }
     if(!playgroundApiKey) {
-        alert("Brak klucza API! Przejdź do zakładki Klucze API i utwórz przynajmniej jeden klucz.");
+        alert(t('js_err_no_key'));
         return;
     }
     
