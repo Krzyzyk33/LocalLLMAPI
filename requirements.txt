@@ -1,6 +1,19 @@
+# Zależności aplikacji.
+#
+#   pip install -r requirements.txt
+#
+# Uwaga o llama-cpp-python: pakiet jest budowany ze źródeł, więc wymaga
+# kompilatora C++ (np. Visual Studio Build Tools) i zależy od backendu.
+# Szczegóły w sekcji "Getting started" w README.md.
+
 fastapi
 uvicorn[standard]
 pydantic
 huggingface-hub
-# llama-cpp-python musi zostać zainstalowane ręcznie z flagami dla Vulkana (zobacz install_vulkan.bat)
+
+# Liczy tokeny promptu do logów. Pobiera plik BPE przy pierwszym użyciu,
+# więc do instalacji potrzebny jest dostęp do sieci (potem działa offline).
+tiktoken
+
+# Wymaga CMAKE_ARGS ustawionych przed instalacją — patrz README.md.
 llama-cpp-python
