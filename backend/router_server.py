@@ -18,9 +18,12 @@ się przy obsłudze dużych modeli):
 import asyncio
 import contextlib
 import gc
+import glob as _glob
 import json
 import os
+import shutil as _shutil
 import socket
+import sys
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -29,7 +32,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -114,6 +117,23 @@ async def lifespan(_: FastAPI):
 app.router.lifespan_context = lifespan
 
 
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request, exc: HTTPException):
+    """Błędy strukturalne (np. brak backendu) idą też w kształcie OpenAI.
+
+    Klienci typu openai-python szukają ``{"error": {...}}``, a nie FastAPI'owe
+    ``{"detail": ...}``. Zostawiamy oba, żeby panel i biblioteki działały.
+    """
+    if isinstance(exc.detail, dict) and exc.detail.get("error"):
+        payload = {"error": exc.detail, "detail": exc.detail}
+        return JSONResponse(status_code=exc.status_code, content=payload, headers=exc.headers)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=exc.headers,
+    )
+
+
 async def auto_unload_loop():
     """Zwalnia modele nieużywane przez ``UNLOAD_IDLE_SECONDS``."""
     while True:
@@ -127,6 +147,323 @@ async def auto_unload_loop():
         for name in expired:
             print(f"[Auto-Unload] Zwalnianie modelu (bezczynność): {name}")
             await unload_model(name)
+
+
+# ==========================================================================
+# Backendy llama.cpp: wykrywanie, warunki wstępne, instalacja
+#
+# llama-cpp-python jest kompilowany ze źródeł i backend jest w nim "zaszyty"
+# w momencie instalacji. Nie da się go włączyć w trakcie pracy procesu —
+# trzeba przebudować pakiet. Dlatego:
+#   * wykrywamy, co faktycznie jest wbudowane,
+#   * sprawdzamy warunki wstępne PRZED kompilacją (20 min bez kompilatora
+#     to strata czasu),
+#   * przy ładowaniu modelu z niedostępnym backendem zwracamy jawny błąd
+#     zamiast po cichu jechać na CPU.
+# ==========================================================================
+
+# Nazwa engine -> flaga cmake wymagana przy instalacji
+BACKEND_CMAKE: Dict[str, Optional[str]] = {
+    "cpu": None,
+    "vulkan": "-DGGML_VULKAN=on",
+    "cuda": "-DGGML_CUDA=on",
+}
+BACKEND_LABELS = {"cpu": "CPU", "vulkan": "Vulkan", "cuda": "CUDA"}
+BACKEND_DLLS = {"vulkan": "ggml-vulkan", "cuda": "ggml-cuda"}
+
+_backend_cache: Dict[str, Any] = {"at": 0.0, "value": {}}
+_install_lock = threading.Lock()
+_install_state: Dict[str, Any] = {
+    "engine": None, "status": "idle", "log": [], "error": None, "pid": None,
+}
+
+
+def _llama_package_dir() -> Optional[str]:
+    try:
+        import llama_cpp
+
+        return os.path.dirname(llama_cpp.__file__)
+    except Exception:
+        return None
+
+
+def detect_backends(ttl: float = 30.0) -> Dict[str, bool]:
+    """Które backendy są faktycznie skompilowane w zainstalowanym llama-cpp.
+
+    Sprawdzamy obecność ``ggml-<backend>.dll`` obok pakietu — to jedyne
+    pewne źródło, bo API llama.cpp nie eksponuje tego per-backend
+    (jest tylko globalne ``llama_supports_gpu_offload()``).
+    """
+    if time.time() - _backend_cache["at"] < ttl:
+        return dict(_backend_cache["value"])
+
+    found: Dict[str, bool] = {"cpu": True, "vulkan": False, "cuda": False}
+    pkg = _llama_package_dir()
+    if pkg:
+        try:
+            names = {os.path.basename(p).lower() for p in _glob.glob(os.path.join(pkg, "**", "ggml-*"), recursive=True)}
+            for engine, prefix in BACKEND_DLLS.items():
+                found[engine] = any(n.startswith(prefix) for n in names)
+        except OSError:
+            pass
+
+    _backend_cache.update({"at": time.time(), "value": found})
+    return dict(found)
+
+
+def gpu_offload_supported() -> bool:
+    """Globalny przełącznik z llama.cpp — weryfikacja krzyżowa wykrywania.
+
+    Nie miesza się z ``detect_backends()``: tam są wyłącznie silniki, tutaj
+    flaga boolowska. Zwracamy ``True``, gdy API nie jest dostępne, żeby brak
+    symbolu nie blokował ładowania modelu.
+    """
+    try:
+        from llama_cpp.llama_cpp import llama_supports_gpu_offload
+
+        return bool(llama_supports_gpu_offload())
+    except Exception:
+        return True
+
+
+def _has_cpp_compiler() -> bool:
+    if _shutil.which("cl") or _shutil.which("g++") or _shutil.which("clang++"):
+        return True
+    # cl.exe jest zwykle poza PATH-em — szukamy go przez vswhere.
+    try:
+        import subprocess
+
+        vswhere = r"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
+        if os.path.exists(vswhere):
+            out = subprocess.run(
+                [vswhere, "-latest", "-products", "*", "-find", r"VC\Tools\MSVC\**\bin\Hostx64\x64\cl.exe"],
+                capture_output=True, text=True, timeout=20,
+            )
+            return bool(out.stdout.strip())
+    except Exception:
+        pass
+    return False
+
+
+def _vulkan_sdk() -> Optional[str]:
+    sdk = os.environ.get("VULKAN_SDK")
+    if sdk and os.path.isdir(sdk):
+        return sdk
+    for base in ("C:/VulkanSDK", "C:/VulkanSDK/latest"):
+        if os.path.isdir(base):
+            return base
+    return None
+
+
+def backend_prereqs(engine: str) -> Dict[str, Any]:
+    """Czy da się tu zbudować ten backend. Zwraca brakujące prereqsy."""
+    missing: List[str] = []
+    if engine == "vulkan":
+        if not _vulkan_sdk():
+            missing.append("Vulkan SDK")
+        elif not _glob.glob(os.path.join(_vulkan_sdk(), "**", "glslc*"), recursive=True):
+            missing.append("glslc (Vulkan SDK)")
+    elif engine == "cuda":
+        if not _shutil.which("nvcc") and not os.path.isdir(
+            "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA"
+        ):
+            missing.append("CUDA Toolkit")
+    if not _has_cpp_compiler():
+        missing.append("C++ compiler (Visual Studio Build Tools)")
+
+    return {
+        "engine": engine,
+        "ok": not missing,
+        "missing": missing,
+        "vulkan_sdk": _vulkan_sdk(),
+    }
+
+
+def missing_provider_message(engine: str) -> str:
+    found = detect_backends()
+    available = [BACKEND_LABELS[e] for e in BACKEND_CMAKE if found.get(e)]
+    return (
+        f"{BACKEND_LABELS.get(engine, engine)} backend is not available in this "
+        f"llama-cpp-python build - the {BACKEND_LABELS.get(engine, engine)} loader "
+        f"is not installed. Available backends: {', '.join(available) or 'none'}. "
+        f"Install the {BACKEND_LABELS.get(engine, engine)} loader from the Settings "
+        f"tab, or change this API key's engine to one of: {', '.join(available) or 'none'}."
+    )
+
+
+def require_backend(engine: str) -> None:
+    """Błąd providera: żądany backend nie istnieje w tej instalacji.
+
+    Bez tego llama.cpp po cichu zostawia warstwy na CPU, a panel pokazuje
+    „VULKAN" - użytkownik myśli, że przyspiesza, a model jedzie na CPU.
+    Wolno zobaczyć twardy błąd niż ciche kłamstwo w UI.
+    """
+    if detect_backends().get(engine, True):
+        return
+    prereq = backend_prereqs(engine)
+    raise HTTPException(
+        status_code=503,
+        detail={
+            "error": "backend_unavailable",
+            "provider": engine,
+            "provider_label": BACKEND_LABELS.get(engine, engine),
+            "message": missing_provider_message(engine),
+            "available": [e for e in BACKEND_CMAKE if detect_backends().get(e)],
+            "missing_prereqs": prereq["missing"],
+            "fix": f"POST /api/backends/{engine}/install",
+        },
+    )
+
+
+def _installed_llama_version() -> Optional[str]:
+    """Wersja llama-cpp-python, którą mamy teraz.
+
+    Przebudowujemy tę samą wersję — zmieniamy tylko backend, więc nie ma
+    powodu przeprowadzać przy okazji aktualizacji biblioteki.
+    """
+    try:
+        from importlib.metadata import version
+
+        return version("llama-cpp-python")
+    except Exception:
+        return None
+
+
+def _run_pip(lines: List[str], cmd: List[str], env: Dict[str, str], phase: str) -> Optional[int]:
+    """Uruchamia potok pip i przepisuje wyjście do logu. Zwraca kod wyjścia."""
+    import subprocess
+
+    lines.append(f"$ {' '.join(cmd)}")
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env, bufsize=1
+    )
+    _install_state["pid"] = proc.pid
+    assert proc.stdout is not None
+    for raw in proc.stdout:
+        text = raw.rstrip()
+        if text:
+            lines.append(text[:300])
+        if len(lines) > 400:
+            del lines[: len(lines) - 400]
+    proc.wait()
+    lines.append(f"[{phase}] exit code {proc.returncode}")
+    return proc.returncode
+
+
+def start_backend_install(engine: str) -> Dict[str, Any]:
+    """Buduje llama-cpp-python z danym backendem w watku tle.
+
+    Dwie fazy, celowo rozdzielone:
+
+    1. ``pip wheel`` — kompilacja do pliku .whl. Trwa minuty, ale **niczego
+       nie zmienia w środowisku**, więc przerwanie lub błąd kompilacji
+       zostawia działającą instalację nietkniętą.
+    2. ``pip install <wheel>`` — podmiana trwa sekundy i jest już skompilowana.
+
+    Bez tego rozdzielenia zwykłe ``pip install --force-reinstall`` kasuje
+    bieżący pakiet przed kompilacją: błąd w fazie 2 zostawiałby aplikację
+    bez llama.cpp w ogóle, a brak ``--no-deps`` przebudowałby też numpy.
+    """
+    if engine not in BACKEND_CMAKE or engine == "cpu":
+        return {"status": "error", "error": f"'{engine}' is not an installable backend"}
+    if detect_backends().get(engine):
+        return {"status": "already", "message": f"{BACKEND_LABELS[engine]} is already installed"}
+
+    prereq = backend_prereqs(engine)
+    if not prereq["ok"]:
+        return {
+            "status": "missing_prereqs",
+            "error": "Missing: " + ", ".join(prereq["missing"]),
+            "prereqs": prereq,
+        }
+
+    with _install_lock:
+        if _install_state["status"] == "running":
+            return {"status": "busy", "engine": _install_state["engine"]}
+        _install_state.update(
+            {"engine": engine, "status": "running", "log": [], "error": None, "pid": None}
+        )
+
+    version = _installed_llama_version()
+    spec = f"llama-cpp-python=={version}" if version else "llama-cpp-python"
+
+    def worker():
+        import glob as g
+        import shutil
+        import tempfile
+
+        label = BACKEND_LABELS[engine]
+        lines = _install_state["log"]
+        env = dict(os.environ)
+        env["CMAKE_ARGS"] = BACKEND_CMAKE[engine] or ""
+
+        # Środowisko musi widzieć toolkit - bez tego cmake nie znajdzie kompilatora.
+        if engine == "vulkan" and not env.get("VULKAN_SDK"):
+            sdk = _vulkan_sdk()
+            if sdk:
+                env["VULKAN_SDK"] = sdk
+                lines.append(f"VULKAN_SDK={sdk}")
+        if engine == "cuda" and not _shutil.which("nvcc"):
+            base = "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA"
+            if os.path.isdir(base):
+                versions = sorted(
+                    (p for p in os.listdir(base) if os.path.isdir(os.path.join(base, p))),
+                    reverse=True,
+                )
+                if versions:
+                    env["PATH"] = os.path.join(base, versions[0], "bin") + os.pathsep + env["PATH"]
+                    env["CUDA_PATH"] = os.path.join(base, versions[0])
+                    lines.append(f"CUDA_PATH={env['CUDA_PATH']}")
+
+        outdir = tempfile.mkdtemp(prefix="llamacpp-build-")
+        lines.append(f"--- Phase 1/2: compiling {spec} with {env['CMAKE_ARGS']} ---")
+        lines.append("This does NOT touch the current installation yet.")
+        try:
+            code = _run_pip(
+                lines,
+                [sys.executable, "-m", "pip", "wheel", spec, "-w", outdir,
+                 "--no-cache-dir", "--no-deps"],
+                env, "build",
+            )
+            if code != 0:
+                _install_state.update(
+                    {"status": "error", "error": f"build failed (exit {code}) — install unchanged"}
+                )
+                return
+
+            wheels = g.glob(os.path.join(outdir, "*.whl"))
+            if not wheels:
+                _install_state.update(
+                    {"status": "error", "error": "build produced no wheel — install unchanged"}
+                )
+                return
+
+            wheel = wheels[0]
+            size_mb = os.path.getsize(wheel) / (1024 * 1024)
+            lines.append(f"--- Phase 2/2: installing {os.path.basename(wheel)} ({size_mb:.1f} MB) ---")
+            code = _run_pip(
+                lines,
+                [sys.executable, "-m", "pip", "install", wheel, "--force-reinstall", "--no-deps"],
+                env, "install",
+            )
+            if code != 0:
+                _install_state.update(
+                    {"status": "error", "error": f"wheel install failed (exit {code})"}
+                )
+                return
+
+            lines.append(f"Done — {label} loader installed. Restart the server to use it.")
+            _backend_cache["at"] = 0.0            # wymuś ponowne wykrycie
+            _install_state.update({"status": "done", "error": None})
+        except Exception as exc:  # pragma: no cover - zależy od środowiska
+            lines.append(str(exc))
+            _install_state.update({"status": "error", "error": str(exc)})
+        finally:
+            shutil.rmtree(outdir, ignore_errors=True)
+            _install_state["pid"] = None
+
+    threading.Thread(target=worker, daemon=True).start()
+    return {"status": "running", "engine": engine, "version": version}
 
 
 # ==========================================================================
@@ -231,6 +568,10 @@ async def load_model(model_name: str, requested_engine: str):
                 lm.refcount += 1
                 lm.last_used = time.time()
                 return lm.llama_instance
+
+        # Backend sprawdzamy PRZED rezerwacją slotu, żeby błąd providera nie
+        # zostawiał za sobą zaalokowanego slotu ani pobranego modelu.
+        require_backend(requested_engine)
 
         slot_idx, victim = await _acquire_slot(requested_engine)
         if victim is not None:
@@ -750,6 +1091,9 @@ async def get_status():
         "local_ip": get_local_ip(),
         "port": SERVER_PORT,
         "uptime": int(time.time() - START_TIME),
+        # Które backendy llama.cpp faktycznie skompilowano - panel używa tego
+        # do wyłączenia wyboru silników, których nie da się użyć.
+        "backends": await asyncio.to_thread(backends_payload),
         # Backward-compat: panel używa tego pola do podświetlenia modelu
         "active_model": loaded[0]["name"] if loaded else None,
     }
@@ -800,6 +1144,89 @@ async def update_slot(req: SlotUpdateRequest):
 
 
 # ==========================================================================
+# Backendy llama.cpp
+# ==========================================================================
+
+
+def _engines_in_use() -> Dict[str, int]:
+    """Które silniki są faktycznie używane — przez sloty i przez klucze API.
+
+    Panel ostrzega tylko wtedy, gdy brakujący backend jest realnie wykorzystywany:
+    niewykorzystywany Vulkan nie jest problemem, a używany — tak.
+    """
+    usage: Dict[str, int] = {}
+    try:
+        for device in get_slot_devices().values():
+            usage[device] = usage.get(device, 0) + 1
+    except Exception:
+        pass
+    try:
+        for k in get_api_keys_stats():
+            eng = k.get("engine")
+            if eng:
+                usage[eng] = usage.get(eng, 0) + 1
+    except Exception:
+        pass
+    return usage
+
+
+def backends_payload() -> Dict[str, Any]:
+    """Stan backendów + warunki wstępne, w formie wygodnej dla panelu."""
+    found = detect_backends()
+    engines = {}
+    for name, cmake in BACKEND_CMAKE.items():
+        entry: Dict[str, Any] = {
+            "label": BACKEND_LABELS[name],
+            "installed": bool(found.get(name)),
+            "cmake_args": cmake,
+            "prereqs": None,
+        }
+        if name != "cpu":
+            entry["prereqs"] = backend_prereqs(name)
+        engines[name] = entry
+
+    in_use = _engines_in_use()
+    return {
+        "engines": engines,
+        "available": [n for n in BACKEND_CMAKE if found.get(n)],
+        "gpu_offload": gpu_offload_supported(),
+        "in_use": in_use,
+        # Silniki, na których coś stoi, a których nie ma - każdy taki request
+        # skończy się 503 zamiast działać.
+        "broken": [
+            n for n in in_use if n in BACKEND_CMAKE and not found.get(n)
+        ],
+        # Kopiujemy stan: wątek instalacji dopisuje do logu w trakcie, gdy
+        # panel go odpytuje - serializacja żywego obiektu potrafi rzucić wyjątek.
+        "install": dict(_install_state, log=list(_install_state["log"])),
+        "restart_required": _install_state["status"] == "done",
+    }
+
+
+@app.get("/api/backends")
+async def get_backends():
+    return await asyncio.to_thread(backends_payload)
+
+
+@app.post("/api/backends/{engine}/install")
+async def install_backend_endpoint(engine: str):
+    if engine not in BACKEND_CMAKE or engine == "cpu":
+        raise HTTPException(
+            status_code=400, detail=f"'{engine}' is not an installable backend"
+        )
+    return await asyncio.to_thread(start_backend_install, engine)
+
+
+@app.post("/api/backends/refresh")
+async def refresh_backends():
+    """Wymusza ponowne wykrycie (po ręcznej instalacji SDK w trakcie sesji)."""
+    _backend_cache["at"] = 0.0
+    if _install_state["status"] == "done":
+        _install_state["status"] = "idle"
+    return await asyncio.to_thread(backends_payload)
+
+
+# ==========================================================================
 # Panel WWW
 # ==========================================================================
 
@@ -809,6 +1236,25 @@ if os.path.exists(web_dir):
 
 
 if __name__ == "__main__":
-    import uvicorn
+    import sys as _sys
 
-    uvicorn.run(app, host="0.0.0.0", port=SERVER_PORT, log_level="warning")
+    if "--backends" in _sys.argv:
+        # start.bat woła to przed wstaniem serwera. Trzymamy to w Pythonie,
+        # a nie w linii .bat, bo cudzysłowy w BAT-ie są podatne na zjedzenie.
+        _state = backends_payload()
+        print("  Installed : " + ", ".join(_state["available"]))
+        if _state["broken"]:
+            print("  MISSING   : " + ", ".join(_state["broken"])
+                  + "  (in use - every request will fail)")
+            for _name in _state["broken"]:
+                _miss = _state["engines"][_name]["prereqs"].get("missing") or []
+                if _miss:
+                    print(f"              {_name}: first install " + ", ".join(_miss))
+                else:
+                    print(f"              {_name}: buildable - use Settings > Backends")
+        else:
+            print("  All backends used by this setup are installed.")
+    else:
+        import uvicorn
+
+        uvicorn.run(app, host="0.0.0.0", port=SERVER_PORT, log_level="warning")

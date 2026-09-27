@@ -15,6 +15,10 @@ Runs on **port 1000**.
   and best tokens/s, models on disk, uptime, slot occupancy, recent requests.
 - **3 model slots** — each bound to a different device (`Vulkan` / `CUDA` /
   `CPU`). Models are routed into the slot matching the API key's engine.
+- **Backend detection and one-click build** — the panel shows which GPU backend
+  is actually compiled into `llama-cpp-python` and builds a missing one on
+  request. A request for a backend that is not installed fails with a clear
+  provider error instead of quietly running on CPU.
 - **No duplicate loads** — concurrent requests for the same model share a
   single in-memory instance instead of loading one per request.
 - **VRAM auto-unload** — models idle for more than 2 minutes are freed
@@ -39,33 +43,92 @@ Runs on **port 1000**.
 - A `.gguf` model in `models/` (a small test model downloads automatically if
   the folder is empty)
 - A C++ compiler — `llama-cpp-python` is built from source
-- For GPU acceleration: the **Vulkan SDK** (recommended) or CUDA
+- For GPU acceleration: the **Vulkan SDK** (recommended) or the **CUDA Toolkit**
+
+## Backends are compiled in, not switched on
+
+`llama-cpp-python` is built from source and the GPU backend is baked into that
+build. There is no runtime toggle:
+
+| `CMAKE_ARGS` | Result |
+| --- | --- |
+| *(unset)* | CPU only |
+| `-DGGML_VULKAN=on` | Vulkan — works with NVIDIA, AMD and Intel GPUs |
+| `-DGGML_CUDA=on` | CUDA — NVIDIA only |
+
+`CMAKE_ARGS` is read **only** by `pip install`. Setting it afterwards changes
+nothing, and `--force-reinstall` on an existing install will not add a backend.
+
+The **Vulkan SDK** and the **CUDA Toolkit** are needed to *compile*. To *run* a
+Vulkan build you do not need the SDK — Windows 10/11 already ships the Vulkan
+runtime.
+
+### Checking what you have
+
+Open the **Settings → Backends** tab. It lists CPU, Vulkan and CUDA with a real
+status, the exact `CMAKE_ARGS` each one needs, and a button that builds it for
+you. If a backend is missing but a slot or API key is assigned to it, the panel
+shows a warning on the Home screen and a request returns:
+
+```json
+HTTP 503
+{
+  "error": {
+    "error": "backend_unavailable",
+    "provider": "vulkan",
+    "provider_label": "Vulkan",
+    "message": "Vulkan backend is not available in this llama-cpp-python build ...",
+    "available": ["cpu"],
+    "missing_prereqs": [],
+    "fix": "POST /api/backends/vulkan/install"
+  }
+}
+```
+
+This is deliberate. Without it llama.cpp silently keeps the layers on CPU while
+the panel still claims Vulkan, so you would be waiting for a speed-up that never
+happens. A hard error is more useful than a lie.
+
+### Building a backend from the panel
+
+The **Install** button in **Settings → Backends** does it in two steps:
+
+1. `pip wheel` — compiles your current version with the right `CMAKE_ARGS` into
+   a `.whl`. Your existing install is untouched, so a failed compile changes
+   nothing.
+2. `pip install <wheel>` — swaps the package in. Seconds, because it is already
+   built.
+
+Both steps use `--no-deps`, so numpy and the other dependencies are never
+rebuilt. Compilation takes several minutes; the log is shown live. **Restart
+the server afterwards** — the DLLs of the old build are already loaded into the
+running process.
+
+If a prerequisite is missing (no Vulkan SDK, no CUDA Toolkit, no C++ compiler)
+the button is disabled and says which one.
 
 ## Getting started
 
-**1. Install Vulkan** — download the [Vulkan SDK](https://vulkan.lunarg.com/)
-and make sure a C++ compiler is available (Visual Studio Build Tools on
-Windows).
-
-**2. Install the dependencies**
+**1. Install the dependencies**
 
 ```bat
 pip install -r requirements.txt
 ```
 
-Then build `llama-cpp-python` with the backend you want. Vulkan:
+That gives you a CPU-only build. For GPU acceleration, install the
+[Vulkan SDK](https://vulkan.lunarg.com/) (or the CUDA Toolkit) and then either
+build it yourself:
 
 ```bat
 set CMAKE_ARGS=-DGGML_VULKAN=on
-pip install llama-cpp-python --upgrade --force-reinstall --no-cache-dir
+pip install llama-cpp-python --upgrade --force-reinstall --no-deps
 ```
 
-For CUDA, set `CMAKE_ARGS=-DGGML_CUDA=on` instead. For CPU-only, plain
-`pip install llama-cpp-python` works.
+…or just start the server and press **Install** in **Settings → Backends**.
 
-**3. Add a model** — put your `.gguf` files in `models/`.
+**2. Add a model** — put your `.gguf` files in `models/`.
 
-**4. Run it**
+**3. Run it**
 
 ```bat
 start.bat
@@ -105,8 +168,11 @@ command you can copy and run as-is.
 | --- | --- | --- |
 | `POST` | `/v1/chat/completions` | Chat completion, streaming and non-streaming — requires a key |
 | `GET` | `/v1/models` | List of available models |
-| `GET` | `/api/status` | Loaded models, slots, uptime, local IP |
+| `GET` | `/api/status` | Loaded models, slots, uptime, local IP, backend status |
 | `GET` | `/api/stats` | Aggregates for the Home dashboard |
+| `GET` | `/api/backends` | Which GPU backends are compiled in, and what each needs |
+| `POST` | `/api/backends/{engine}/install` | Rebuild `llama-cpp-python` with that backend (background) |
+| `POST` | `/api/backends/refresh` | Re-scan the installation |
 | `GET`/`POST`/`PUT`/`DELETE` | `/api/keys`, `/api/keys/{id}` | API key management |
 | `GET` | `/api/logs/{id}` | Request history for one key |
 | `GET`/`PUT` | `/api/settings/slots` | Slot → device mapping |

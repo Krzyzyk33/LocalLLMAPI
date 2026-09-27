@@ -97,6 +97,18 @@
 
       <!-- ---------- HOME ---------- -->
       <section class="panel is-active" id="home">
+        <div class="alert alert-warn" id="backend-alert" hidden>
+          <i class="ti ti-alert-triangle"></i>
+          <div>
+            <b id="backend-alert-title"></b>
+            <div id="backend-alert-body"></div>
+            <div class="alert-act">
+              <button class="btn btn-sm btn-primary" id="backend-alert-go"><i class="ti ti-settings"></i> <span data-i18n="be_go_settings">Open Settings</span></button>
+              <button class="btn btn-sm btn-ghost" id="backend-alert-ignore"><span data-i18n="be_ignore">Ignore</span></button>
+            </div>
+          </div>
+        </div>
+
         <div class="app-head">
           <div class="brand-mark brand-mark-lg"><i class="ti ti-terminal-2"></i></div>
           <div>
@@ -349,6 +361,22 @@
 
       <!-- ---------- SETTINGS ---------- -->
       <section class="panel" id="settings">
+        <div class="card">
+          <div class="card-head">
+            <h3><i class="ti ti-cpu"></i> <span data-i18n="settings_backends_title">Backends</span></h3>
+            <button class="btn btn-ghost btn-sm" id="backends-refresh"><i class="ti ti-refresh"></i> <span data-i18n="settings_backends_refresh">Rescan</span></button>
+          </div>
+          <p class="card-desc" data-i18n="settings_backends_desc">The GPU backend is compiled into llama-cpp-python, so it cannot be switched on at runtime. A request for a backend that is not installed fails with a provider error instead of silently running on CPU.</p>
+          <div class="backends" id="backends-container"></div>
+          <div id="backends-log-wrap" class="backends-log-wrap" hidden>
+            <div class="backends-log-head">
+              <span data-i18n="settings_backends_log">Build log</span>
+              <span class="chip" id="backends-log-state">—</span>
+            </div>
+            <pre class="backends-log" id="backends-log"></pre>
+          </div>
+        </div>
+
         <div class="card">
           <div class="card-head"><h3><i class="ti ti-stack-2"></i> <span data-i18n="settings_slots_title">Model slots</span></h3></div>
           <p class="card-desc" data-i18n="settings_slots_desc">Each slot has its own device. A model is placed in the slot matching the API key engine.</p>

@@ -76,8 +76,21 @@ async function api(path, options = {}) {
   });
   if (!res.ok) {
     let detail = `HTTP ${res.status}`;
-    try { detail = (await res.json()).detail || detail; } catch { /* pusta body */ }
-    throw new Error(detail);
+    let info = null;
+    try {
+      const body = await res.json();
+      // Błędy strukturalne (brak backendu) mają detail jako obiekt — bez tego
+      // new Error() zamieniłby go w "[object Object]".
+      detail = body.error || body.detail || detail;
+      if (detail && typeof detail === 'object') {
+        info = detail;
+        detail = detail.message || detail.error || `HTTP ${res.status}`;
+      }
+    } catch { /* pusta body */ }
+    const err = new Error(detail);
+    if (info) Object.assign(err, info, { status: res.status });
+    else err.status = res.status;
+    throw err;
   }
   return res.status === 204 ? null : res.json();
 }
@@ -182,7 +195,7 @@ function showTab(name, push = true) {
   stagger(panel);
   if (push && location.hash !== `#${name}`) history.replaceState(null, '', `#${name}`);
 
-  if (name === 'settings') { loadSlots(); loadLoadedModels(); }
+  if (name === 'settings') { loadBackends(); loadSlots(); loadLoadedModels(); }
   if (name === 'docs') renderDocs();
   if (name === 'home') loadStats();
   refresh(true);
@@ -856,6 +869,145 @@ function renderEndpoints() {
    ========================================================================== */
 const ENGINES = ['cpu', 'cuda', 'vulkan'];
 
+/* ---------- backendy llama.cpp ----------
+   Backend jest wtopiony w llama-cpp-python w chwili kompilacji, więc wybor
+   silnika musi respektować to, co faktycznie jest zainstalowane. Bez tego
+   slot mógłby mieć „Vulkan", a model by po cichu jechał na CPU.          */
+let backendsState = null;
+
+const engineAvailable = (name) =>
+  !backendsState || (backendsState.engines?.[name]?.installed ?? true);
+
+/* ---------- ostrzeżenie o niedostępnym backendzie ----------
+   Bez tego użytkownik widzi klucz „Vulkan" i zakłada, że przyspiesza, a
+   każdy request skończy się 503. Baner pojawia się tylko wtedy, gdy brakujący
+   backend jest realnie używany przez slot albo klucz API.                    */
+let backendAlertDismissed = false;
+
+function renderBackendAlert(backends) {
+  const box = $s('backend-alert');
+  if (!box || !backends) return;
+  const broken = backends.broken || [];
+  if (!broken.length || backendAlertDismissed) { box.hidden = true; return; }
+
+  const labels = broken.map((n) => backends.engines?.[n]?.label || n.toUpperCase());
+  const missing = [...new Set(broken.flatMap((n) => backends.engines?.[n]?.prereqs?.missing || []))];
+  const slots = broken.reduce((a, n) => a + (backends.in_use?.[n] || 0), 0);
+
+  $s('backend-alert-title').textContent = t('be_alert_title', { what: labels.join(', ') });
+  $s('backend-alert-body').textContent = missing.length
+    ? t('be_alert_missing', { what: missing.join(', '), count: slots })
+    : t('be_alert_ready', { count: slots });
+
+  box.hidden = false;
+  // Odświeżenie bez zmiany treści nie ma powododu na nową animację.
+  if (box.dataset.sig !== labels.join()) {
+    box.dataset.sig = labels.join();
+    box.classList.remove('is-in');
+    void box.offsetWidth;
+    box.classList.add('is-in');
+  }
+}
+
+async function loadBackends() {
+  const host = $s('backends-container');
+  if (!host) return;
+  try {
+    const data = await api('/api/backends');
+    backendsState = data;
+    renderBackends(data);
+    renderBackendAlert(data);
+  } catch (e) { console.error('backends', e); }
+}
+
+function renderBackends(data) {
+  const host = $s('backends-container');
+  const installing = data.install.status === 'running';
+  const finished = ['done', 'error'].includes(data.install.status);
+
+  host.replaceChildren(...Object.entries(data.engines).map(([name, e]) => {
+    const prereq = e.prereqs;
+    const canBuild = name !== 'cpu' && !e.installed && prereq?.ok;
+    const note = e.installed
+      ? t('be_installed')
+      : prereq?.ok
+        ? t('be_not_installed')
+        : t('be_missing', { what: (prereq?.missing || []).join(', ') });
+
+    return el('div', { class: `be-row ${e.installed ? 'is-on' : 'is-off'}` },
+      el('div', { class: 'be-main' },
+        icon(e.installed ? 'circle-check' : 'circle-x'),
+        el('div', { class: 'be-text' },
+          el('div', { class: 'be-name' },
+            el('span', { text: e.label }),
+            el('span', { class: `be-state ${e.installed ? 'ok' : 'no'}`, text: e.installed ? t('be_ready') : t('be_absent') })),
+          el('div', { class: 'be-note', text: note }))),
+      e.cmake_args
+        ? el('code', { class: 'be-cmake', text: e.cmake_args })
+        : el('code', { class: 'be-cmake', text: t('be_builtin') }),
+      el('button', {
+        class: 'btn btn-sm',
+        disabled: e.installed || installing || !canBuild,
+        title: e.installed ? t('be_installed')
+          : !prereq?.ok ? t('be_missing', { what: (prereq?.missing || []).join(', ') })
+          : t('be_install_title'),
+        onclick: () => installBackend(name),
+      },
+        icon(installing && data.install.engine === name ? 'loader-2' : 'download'),
+        el('span', { text: installing && data.install.engine === name
+          ? t('be_building') : e.installed ? t('be_installed') : t('be_install') })),
+    );
+  }));
+
+  // Log instalacji
+  const wrap = $s('backends-log-wrap');
+  const lines = data.install.log || [];
+  wrap.hidden = !finished && !lines.length;
+  $s('backends-log').textContent = lines.join('\n') || t('be_no_log');
+  const stateLabel = {
+    running: t('be_building'), done: t('be_done'),
+    error: t('be_failed'), idle: '—',
+  }[data.install.status] || data.install.status;
+  $s('backends-log-state').textContent = data.install.error
+    ? `${stateLabel} — ${data.install.error}` : stateLabel;
+
+  // Silniki, których nie ma, muszą zniknąć z list wyboru
+  $$('#new-key-engine option, #edit-key-engine-input option, .slot-sel option')
+    .forEach((o) => {
+      const ok = engineAvailable(o.value);
+      o.disabled = !ok;
+      o.textContent = ok ? o.value.toUpperCase()
+        : `${o.value.toUpperCase()} — ${t('be_absent')}`;
+    });
+}
+
+async function installBackend(engine) {
+  const host = $s('backends-container');
+  try {
+    const r = await api(`/api/backends/${engine}/install`, { method: 'POST' });
+    if (r.status === 'missing_prereqs') toast(r.error, 'err', 5000);
+    else if (r.status === 'running') toast(t('be_started', { name: engine.toUpperCase() }), 'ok', 4000);
+    else if (r.status === 'already') toast(r.message, 'ok');
+    loadBackends();
+    if (r.status === 'running') pollInstall();
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+/* Odpytujemy log co 2 s aż instalacja się skończy (kompilacja trwa minuty,
+   a użytkownik musi widzieć postęp, nie pusty ekran). */
+function pollInstall() {
+  const tick = async () => {
+    try {
+      const data = await api('/api/backends');
+      backendsState = data;
+      renderBackends(data);
+      if (data.install.status === 'running') { setTimeout(tick, 2000); return; }
+      if (data.restart_required) toast(t('be_restart'), 'ok', 8000);
+    } catch { /* serwer chwilowo zajęty instalacją */ }
+  };
+  setTimeout(tick, 2000);
+}
+
 async function loadSlots() {
   try {
     const slots = await api('/api/settings/slots');
@@ -875,6 +1027,9 @@ async function loadSlots() {
         el('button', { class: 'btn', onclick: () => saveSlot(idx) },
           icon('device-floppy'), el('span', { text: t('settings_save_btn') })),
       )));
+    // Po odświeżeniu slotów wracamy do stanu backendów, bo select musi
+    // znowu dostać atrybut `disabled` na brakujących silnikach.
+    if (backendsState) renderBackends(backendsState);
   } catch (e) { console.error('slots', e); }
 }
 
@@ -935,6 +1090,20 @@ $('#unload-all').addEventListener('click', () =>
     } catch (e) { toast(e.message, 'err'); }
   }));
 
+$('#backends-refresh').addEventListener('click', async () => {
+  try {
+    await api('/api/backends/refresh', { method: 'POST' });
+    toast(t('be_rescanned'), 'ok');
+    loadBackends();
+  } catch (e) { toast(e.message, 'err'); }
+});
+
+$('#backend-alert-go').addEventListener('click', () => showTab('settings'));
+$('#backend-alert-ignore').addEventListener('click', () => {
+  backendAlertDismissed = true;
+  $s('backend-alert').hidden = true;
+});
+
 /* ==========================================================================
    DOKUMENTACJA (w zakladce Ustawienia)
    Tresc generowana z zywych danych — adres IP, klucz i nazwy modeli
@@ -975,6 +1144,7 @@ const DOC_ERRORS = [
   ['403', '403', 'docs_x_403'],
   ['422', '422', 'docs_x_422'],
   ['503', '503', 'docs_x_503'],
+  ['be', '503', 'docs_x_backend'],
   ['ctx', '—', 'docs_x_ctx'],
 ];
 
@@ -1127,6 +1297,10 @@ async function poll() {
       const s = await api('/api/status');
       setStatus(true, `${s.local_ip}:${s.port}`);
       updateServerIp(s.local_ip);
+      // /api/status niesie stan backendów, więc baner nie wymaga osobnego
+      // zapytania na każdym ticku.
+      backendsState = s.backends || backendsState;
+      if (backendsState) renderBackendAlert(backendsState);
       await loadStats();
     } else {
       const [status, keys] = await Promise.all([api('/api/status'), api('/api/keys')]);
@@ -1184,6 +1358,9 @@ function start() {
   renderEndpoints();
   renderCode();
   showSkeleton();
+  // Baner o niedostępnym backendzie musi być widoczny od razu — czekanie na
+  // pierwszy poll oznaczałoby kilka sekund, w których każdy request pada.
+  loadBackends();
   refresh(true).then(schedule);
   setTimeout(schedule, 3000);
 }
@@ -1192,6 +1369,6 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 else start();
 
 /* i18n.js potrzebuje tych, żeby przerysować dane po zmianie języka. */
-window.LLMAPI = { toast, showTab, loadStats, renderCode, renderEndpoints, renderKeys, renderDocs, applyRail };
+window.LLMAPI = { toast, showTab, loadStats, renderCode, renderEndpoints, renderKeys, renderDocs, applyRail, loadBackends, renderBackendAlert };
 
 })();
